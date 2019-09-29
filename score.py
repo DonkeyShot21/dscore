@@ -69,40 +69,21 @@ table formats plus example outputs, consult the documentation for the
 """
 from __future__ import print_function
 from __future__ import unicode_literals
-import argparse
 import os
 import sys
+import glob
 
 from tabulate import tabulate
 
-from scorelib import __version__ as VERSION
-from scorelib.argparse import ArgumentParser
-from scorelib.rttm import load_rttm
-from scorelib.turn import merge_turns, trim_turns
-from scorelib.score import score
-from scorelib.six import iterkeys
-from scorelib.uem import gen_uem, load_uem
-from scorelib.utils import error, info, warn, xor
-
-
-class RefRTTMAction(argparse.Action):
-    """Custom action to ensure that reference files are specified from a
-    script file or from the command line but not both.
-    """
-    def __call__(self, parser, namespace, values, option_string=None):
-        setattr(namespace, self.dest, values)
-        if not xor(namespace.ref_rttm_fns, namespace.ref_rttm_scpf):
-            parser.error('Exactly one of -r and -R must be set.')
-
-
-class SysRTTMAction(argparse.Action):
-    """Custom action to ensure that system files are specified from a script
-    file or from the command line but not both.
-    """
-    def __call__(self, parser, namespace, values, option_string=None):
-        setattr(namespace, self.dest, values)
-        if not xor(namespace.sys_rttm_fns, namespace.sys_rttm_scpf):
-            parser.error('Exactly one of -s and -S must be set.')
+from .scorelib import __version__ as VERSION
+from .scorelib.argparse import ArgumentParser
+from .scorelib.rttm import load_rttm
+from .scorelib.turn import merge_turns, trim_turns
+from .scorelib.score import score
+from .scorelib.six import iterkeys
+from .scorelib.uem import gen_uem, load_uem
+from .scorelib.utils import error, info, warn, xor
+from types import SimpleNamespace
 
 
 def load_rttms(rttm_fns):
@@ -141,17 +122,18 @@ def check_for_empty_files(ref_turns, sys_turns, uem):
     """Warn on files in UEM without reference or speaker turns."""
     ref_file_ids = {turn.file_id for turn in ref_turns}
     sys_file_ids = {turn.file_id for turn in sys_turns}
-    for file_id in sorted(iterkeys(uem)):
-        if file_id not in ref_file_ids:
-            warn('File "%s" missing in reference RTTMs.' % file_id)
-        if file_id not in sys_file_ids:
-            warn('File "%s" missing in system RTTMs.' % file_id)
+    # for file_id in sorted(iterkeys(uem)):
+    #     if file_id not in ref_file_ids:
+    #         warn('File "%s" missing in reference RTTMs.' % file_id)
+    #     if file_id not in sys_file_ids:
+    #         warn('File "%s" missing in system RTTMs.' % file_id)
     # TODO: Clarify below warnings; this indicates that there are no
     #       ELIGIBLE reference/system turns.
     if not ref_turns:
         warn('No reference speaker turns found within UEM scoring regions.')
     if not sys_turns:
         warn('No system speaker turns found within UEM scoring regions.')
+    return set.intersection(ref_file_ids, sys_file_ids)
 
 
 def load_script_file(fn):
@@ -201,111 +183,96 @@ def print_table(file_scores, global_scores, n_digits=2,
     print(tbl)
 
 
-def main():
-    """Main."""
-    # Parse command line arguments.
-    parser = ArgumentParser(
-        description='Score diarization from RTTM files.', add_help=True,
-        usage='%(prog)s [options]')
-    parser.add_argument(
-        '-r', nargs='+', default=[], metavar='STR', dest='ref_rttm_fns',
-        action=RefRTTMAction,
-        help='reference RTTM files (default: %(default)s)')
-    parser.add_argument(
-        '-R', nargs=None, metavar='STR', dest='ref_rttm_scpf',
-        action=RefRTTMAction,
-        help='reference RTTM script file (default: %(default)s)')
-    parser.add_argument(
-        '-s', nargs='+', default=[], metavar='STR', dest='sys_rttm_fns',
-        action=SysRTTMAction,
-        help='system RTTM files (default: %(default)s)')
-    parser.add_argument(
-        '-S', nargs=None, metavar='STR', dest='sys_rttm_scpf',
-        action=SysRTTMAction,
-        help='system RTTM script file (default: %(default)s)')
-    parser.add_argument(
-        '-u,--uem', nargs=None, metavar='STR', dest='uemf',
-        help='un-partitioned evaluation map file (default: %(default)s)')
-    parser.add_argument(
-        '--collar', nargs=None, default=0.0, type=float, metavar='FLOAT',
-        help='collar size in seconds for DER computaton '
-             '(default: %(default)s)')
-    parser.add_argument(
-        '--ignore_overlaps', action='store_true', default=False,
-        help='ignore overlaps when computing DER')
-    parser.add_argument(
-        '--jer_min_ref_dur', nargs=None, default=0.0, metavar='FLOAT',
-        help='minimum reference speaker duration for JER '
-        '(default: %(default)s)')
-    parser.add_argument(
-        '--step', nargs=None, default=0.010, type=float, metavar='FLOAT',
-        help='step size in seconds (default: %(default)s)')
-    parser.add_argument(
-        '--n_digits', nargs=None, default=2, type=int, metavar='INT',
-        help='number of decimal places to print (default: %(default)s)')
-    parser.add_argument(
-        '--table_fmt', nargs=None, dest='table_format', default='simple',
-        metavar='STR',
-        help='tabulate table format (default: %(default)s)')
-    parser.add_argument(
-        '--version', action='version',
-        version='%(prog)s ' + VERSION)
-    if len(sys.argv) == 1:
-        parser.print_help()
-        sys.exit(1)
-    args = parser.parse_args()
+class ScoreKeeper:
 
-    # Check that at least one reference RTTM and at least one system RTTM
-    # was specified.
-    if args.ref_rttm_scpf is not None:
-        args.ref_rttm_fns = load_script_file(args.ref_rttm_scpf)
-    if args.sys_rttm_scpf is not None:
-        args.sys_rttm_fns = load_script_file(args.sys_rttm_scpf)
-    if not args.ref_rttm_fns:
-        error('No reference RTTMs specified.')
-        sys.exit(1)
-    if not args.sys_rttm_fns:
-        error('No system RTTMs specified.')
-        sys.exit(1)
+    def __init__(self, **kwargs):
+        self.args = {
+            'ref_rttm_fns': [],
+            'ref_rttm_scpf': None,
+            'sys_rttm_fns': [],
+            'sys_rttm_scpf': None,
+            'uemf': None,
+            'collar': 0.0,
+            'ignore_overlaps': False,
+            'jer_min_ref_dur': 0.0,
+            'step': 0.010,
+            'n_digits': 2,
+            'table_format': 'simple'}
+        self.args.update(kwargs)
+        self.args = SimpleNamespace(**self.args)
 
-    # Load speaker/reference speaker turns and UEM. If no UEM specified,
-    # determine it automatically.
-    info('Loading speaker turns from reference RTTMs...', file=sys.stderr)
-    ref_turns, _ = load_rttms(args.ref_rttm_fns)
-    info('Loading speaker turns from system RTTMs...', file=sys.stderr)
-    sys_turns, _ = load_rttms(args.sys_rttm_fns)
-    if args.uemf is not None:
-        info('Loading universal evaluation map...', file=sys.stderr)
-        uem = load_uem(args.uemf)
-    else:
-        warn('No universal evaluation map specified. Approximating from '
-             'reference and speaker turn extents...')
-        uem = gen_uem(ref_turns, sys_turns)
+        if not xor(self.args.ref_rttm_fns, self.args.ref_rttm_scpf):
+            error('Exactly one of ref_rttm_fns and ref_rttm_scpf must be set.')
 
-    # Trim turns to UEM scoring regions and merge any that overlap.
-    info('Trimming reference speaker turns to UEM scoring regions...',
-         file=sys.stderr)
-    ref_turns = trim_turns(ref_turns, uem)
-    info('Trimming system speaker turns to UEM scoring regions...',
-         file=sys.stderr)
-    sys_turns = trim_turns(sys_turns, uem)
-    info('Checking for overlapping reference speaker turns...',
-         file=sys.stderr)
-    ref_turns = merge_turns(ref_turns)
-    info('Checking for overlapping system speaker turns...',
-         file=sys.stderr)
-    sys_turns = merge_turns(sys_turns)
+        # Check that at least one reference RTTM and at least one system RTTM
+        # was specified.
+        if self.args.ref_rttm_scpf is not None:
+            self.args.ref_rttm_fns = load_script_file(self.args.ref_rttm_scpf)
+        if not self.args.ref_rttm_fns:
+            error('No reference RTTMs specified.')
+            sys.exit(1)
 
-    # Score.
-    info('Scoring...', file=sys.stderr)
-    check_for_empty_files(ref_turns, sys_turns, uem)
-    file_scores, global_scores = score(
-        ref_turns, sys_turns, uem, step=args.step,
-        jer_min_ref_dur=args.jer_min_ref_dur, collar=args.collar,
-        ignore_overlaps=args.ignore_overlaps)
-    print_table(
-        file_scores, global_scores, args.n_digits, args.table_format)
+        # Load speaker/reference speaker turns and UEM. If no UEM specified,
+        # determine it automatically.
+        print('Loading speaker turns from reference RTTMs...',)
+        self.ref_turns, _ = load_rttms(self.args.ref_rttm_fns)
+
+        if self.args.uemf is not None:
+            print('Loading universal evaluation map...')
+            self.uem = load_uem(self.args.uemf)
+        else:
+            warn('No universal evaluation map specified. Approximating from '
+                 'reference and speaker turn extents...')
+            self.uem = gen_uem(self.ref_turns, self.sys_turns)
+
+        # Trim turns to UEM scoring regions and merge any that overlap.
+        print('Trimming reference speaker turns to UEM scoring regions...')
+        self.ref_turns = trim_turns(self.ref_turns, self.uem)
+        print('Checking for overlapping reference speaker turns...')
+        self.ref_turns = merge_turns(self.ref_turns)
+
+    def score(self, sys_rttm_fns=None, sys_rttm_scpf=None):
+        if not xor(sys_rttm_fns, sys_rttm_scpf):
+            error('Exactly one of sys_rttm_fns and sys_rttm_scpf must be set.')
+
+        if sys_rttm_scpf is not None:
+            sys_rttm_fns = load_script_file(sys_rttm_scpf)
+
+        if not sys_rttm_fns:
+            error('No system RTTMs specified.')
+            sys.exit(1)
+
+        print('Loading speaker turns from system RTTMs...')
+        sys_turns, _ = load_rttms(sys_rttm_fns)
+
+        print('Trimming system speaker turns to UEM scoring regions...')
+        sys_turns = trim_turns(sys_turns, self.uem)
+
+        print('Checking for overlapping system speaker turns...')
+        sys_turns = merge_turns(sys_turns)
+
+        print('Scoring...')
+        subset = check_for_empty_files(self.ref_turns, sys_turns, self.uem)
+        subset_ref_turns = [t for t in self.ref_turns if t.file_id in subset]
+        subset_uem = {k: v for k, v in self.uem.items() if k in subset}
+        file_scores, global_scores = score(
+            subset_ref_turns, sys_turns, subset_uem, step=self.args.step,
+            jer_min_ref_dur=self.args.jer_min_ref_dur, collar=self.args.collar,
+            ignore_overlaps=self.args.ignore_overlaps)
+        print_table(file_scores, global_scores, self.args.n_digits,
+            self.args.table_format)
+        file_scores = [fs._asdict() for fs in file_scores]
+        global_scores = global_scores._asdict()
+        global_scores.pop('file_id')
+        return file_scores, global_scores
 
 
 if __name__ == '__main__':
-    main()
+    ref_rttm_dir = '../data/test/rttm/'
+    sys_rttm = '../rttm/sample.rttm'
+    uemf = '../data/test/uem/all.uem'
+    ref_rttms = [f for f in glob.glob('../data/test/rttm/*.rttm')]
+    sk = ScoreKeeper(
+        ref_rttm_fns=ref_rttms,
+        uemf=uemf)
+    print(sk.score(sys_rttm_fns=[sys_rttm]))
